@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"strconv"
-	"strings"
 	"text/template"
 	"time"
 
@@ -16,10 +14,8 @@ import (
 	"github.com/containous/traefik/v2/pkg/job"
 	"github.com/containous/traefik/v2/pkg/log"
 	"github.com/containous/traefik/v2/pkg/provider"
-	"github.com/containous/traefik/v2/pkg/provider/constraints"
 	"github.com/containous/traefik/v2/pkg/safe"
 	"github.com/containous/traefik/v2/pkg/types"
-	"github.com/hashicorp/consul/api"
 	triton "github.com/joyent/triton-go"
 	"github.com/joyent/triton-go/authentication"
 	"github.com/joyent/triton-go/compute"
@@ -32,13 +28,10 @@ var _ provider.Provider = (*Provider)(nil)
 
 type itemData struct {
 	ID        string
-	Node      string
 	Name      string
 	Address   string
 	Port      string
-	Status    string
 	Labels    map[string]string
-	Tags      []string
 	ExtraConf configuration
 }
 
@@ -53,9 +46,7 @@ type Provider struct {
 	Cache             bool            `description:"Use local agent caching for catalog reads." json:"cache,omitempty" toml:"cache,omitempty" yaml:"cache,omitempty" export:"true"`
 	ExposedByDefault  bool            `description:"Expose containers by default." json:"exposedByDefault,omitempty" toml:"exposedByDefault,omitempty" yaml:"exposedByDefault,omitempty" export:"true"`
 	DefaultRule       string          `description:"Default rule." json:"defaultRule,omitempty" toml:"defaultRule,omitempty" yaml:"defaultRule,omitempty"`
-
-	client         *api.Client
-	defaultRuleTpl *template.Template
+	defaultRuleTpl    *template.Template
 }
 
 // EndpointConfig holds configurations of the endpoint.
@@ -71,12 +62,6 @@ type EndpointConfig struct {
 // SetDefaults sets the default values.
 func (c *EndpointConfig) SetDefaults() {
 	c.Address = "http://127.0.0.1:8500"
-}
-
-// EndpointHTTPAuthConfig holds configurations of the authentication.
-type EndpointHTTPAuthConfig struct {
-	Username string `description:"Basic Auth username" json:"username,omitempty" toml:"username,omitempty" yaml:"username,omitempty" export:"true"`
-	Password string `description:"Basic Auth password" json:"password,omitempty" toml:"password,omitempty" yaml:"password,omitempty" export:"true"`
 }
 
 // SetDefaults sets the default values.
@@ -106,32 +91,40 @@ func (p *Provider) Init() error {
 // Provide allows the consul catalog provider to provide configurations to traefik using the given configuration channel.
 func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.Pool) error {
 	pool.GoCtx(func(routineCtx context.Context) {
-		ctxLog := log.With(routineCtx, log.Str(log.ProviderName, "consulcatalog"))
+		ctxLog := log.With(routineCtx, log.Str(log.ProviderName, "triton"))
 		logger := log.FromContext(ctxLog)
 
 		operation := func() error {
-			var err error
-
-			p.client, err = createClient(p.Endpoint)
-			if err != nil {
-				return fmt.Errorf("error create consul client, %v", err)
-			}
 
 			ticker := time.NewTicker(time.Duration(p.RefreshInterval))
 
 			for {
 				select {
 				case <-ticker.C:
-					data, err := p.getConsulServicesData(routineCtx)
+					c2 := "https://us-east-2-cloudapi.bdf-cloud.iqvia.net"
+					c3 := "https://us-east-3-cloudapi.bdf-cloud.iqvia.net"
+					c4 := "https://us-east-4-cloudapi.bdf-cloud.iqvia.net"
+
+					c2s, err1 := p.NewTritonClient(c2, ctxLog)
+					c3s, err2 := p.NewTritonClient(c3, ctxLog)
+					c4s, err3 := p.NewTritonClient(c4, ctxLog)
+
+					if err1 != nil && err2 != nil && err3 != nil {
+						logger.Fatalln("Error")
+
+					}
+					cArr := []*compute.ComputeClient{c2s, c3s, c4s}
+					tagName := fmt.Sprintf(p.Prefix + ".Enable")
+					data, err := p.GetMachineMetaByTag(tagName, "true", cArr, ctxLog)
 					if err != nil {
-						logger.Errorf("error get consul catalog data, %v", err)
+						logger.Errorf("error triton meta data, %v", err)
 						return err
 					}
 
 					configuration := p.buildConfiguration(routineCtx, data)
 					fmt.Println("Build configuration is ", *configuration)
 					configurationChan <- dynamic.Message{
-						ProviderName:  "consulcatalog",
+						ProviderName:  "triton",
 						Configuration: configuration,
 					}
 				case <-routineCtx.Done():
@@ -147,13 +140,14 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 
 		err := backoff.RetryNotify(safe.OperationWithRecover(operation), backoff.WithContext(job.NewBackOff(backoff.NewExponentialBackOff()), ctxLog), notify)
 		if err != nil {
-			logger.Errorf("Cannot connect to consul catalog server %+v", err)
+			logger.Errorf("Cannot connect to triton server %+v", err)
 		}
 	})
 
 	return nil
 }
 
+/*
 func (p *Provider) getConsulServicesData(ctx context.Context) ([]itemData, error) {
 	consulServiceNames, err := p.fetchServices(ctx)
 	fmt.Println("Sumesh: consul service names are", consulServiceNames)
@@ -219,48 +213,6 @@ func (p *Provider) fetchService(ctx context.Context, name string) ([]*api.Catalo
 	return consulServices, healthServices, err
 }
 
-func (p *Provider) fetchServices(ctx context.Context) ([]string, error) {
-	// The query option "Filter" is not supported by /catalog/services.
-	// https://www.consul.io/api/catalog.html#list-services
-	opts := &api.QueryOptions{AllowStale: p.Stale, RequireConsistent: p.RequireConsistent, UseCache: p.Cache}
-	serviceNames, _, err := p.client.Catalog().Services(opts)
-	if err != nil {
-		return nil, err
-	}
-
-	// The keys are the service names, and the array values provide all known tags for a given service.
-	// https://www.consul.io/api/catalog.html#list-services
-	var filtered []string
-	for svcName, tags := range serviceNames {
-		logger := log.FromContext(log.With(ctx, log.Str("serviceName", svcName)))
-
-		if !p.ExposedByDefault && !contains(tags, p.Prefix+".enable=true") {
-			logger.Debug("Filtering disabled item")
-			continue
-		}
-
-		if contains(tags, p.Prefix+".enable=false") {
-			logger.Debug("Filtering disabled item")
-			continue
-		}
-
-		matches, err := constraints.MatchTags(tags, p.Constraints)
-		if err != nil {
-			logger.Errorf("Error matching constraints expression: %v", err)
-			continue
-		}
-
-		if !matches {
-			logger.Debugf("Container pruned by constraint expression: %q", p.Constraints)
-			continue
-		}
-
-		filtered = append(filtered, svcName)
-	}
-
-	return filtered, err
-}
-
 func contains(values []string, val string) bool {
 	for _, value := range values {
 		if strings.EqualFold(value, val) {
@@ -269,42 +221,13 @@ func contains(values []string, val string) bool {
 	}
 	return false
 }
-
-func createClient(cfg *EndpointConfig) (*api.Client, error) {
-	config := api.Config{
-		Address:    cfg.Address,
-		Scheme:     cfg.Scheme,
-		Datacenter: cfg.DataCenter,
-		WaitTime:   time.Duration(cfg.EndpointWaitTime),
-		Token:      cfg.Token,
-	}
-
-	if cfg.HTTPAuth != nil {
-		config.HttpAuth = &api.HttpBasicAuth{
-			Username: cfg.HTTPAuth.Username,
-			Password: cfg.HTTPAuth.Password,
-		}
-	}
-
-	if cfg.TLS != nil {
-		config.TLSConfig = api.TLSConfig{
-			Address:            cfg.Address,
-			CAFile:             cfg.TLS.CA,
-			CertFile:           cfg.TLS.Cert,
-			KeyFile:            cfg.TLS.Key,
-			InsecureSkipVerify: cfg.TLS.InsecureSkipVerify,
-		}
-	}
-
-	return api.NewClient(&config)
-}
-
-func NewTritonClient(SDC_URL string, ctxLog context.Context) (*compute.ComputeClient, error) {
+*/
+func (p *Provider) NewTritonClient(SDC_URL string, ctxLog context.Context) (*compute.ComputeClient, error) {
 	logger := log.FromContext(ctxLog)
-
-	keyMaterial := os.Getenv("TRITON_KEY_MATERIAL")
-	keyID := os.Getenv("TRITON_SSH_KEY_ID")
-	accountName := os.Getenv("TRITON_ACCOUNT")
+	keyMaterial := p.Endpoint.SDCKeyMaterial
+	keyID := p.Endpoint.SDCKeyID
+	accountName := p.Endpoint.SDCAccount
+	fmt.Println("Triton details", keyMaterial, keyID, accountName)
 	userName := ""
 	var signer authentication.Signer
 	var err error
@@ -358,50 +281,54 @@ func NewTritonClient(SDC_URL string, ctxLog context.Context) (*compute.ComputeCl
 	return c, err
 }
 
-func GetMachineMetaByTag(tagName string, tagValue string, cArr []*compute.ComputeClient) ([]string, map[string]pq.StringArray, error) {
-	ShardAndIpsMap := make(map[string]pq.StringArray)
-	var IPArray []string
-	ctx := context.Background()
+func (p *Provider) GetMachineMetaByTag(tagName string, tagValue string, cArr []*compute.ComputeClient, ctxLog context.Context) ([]itemData, error) {
+	var data []itemData
+	logger := log.FromContext(ctxLog)
 	var err error
+	fmt.Println("C ARRRRR is", cArr)
 	for _, c := range cArr {
 
 		listInput := &compute.ListInstancesInput{Tags: map[string]interface{}{tagName: tagValue}}
 		ci := c.Instances()
 		instances, err := ci.List(context.Background(), listInput)
 		if err != nil {
-			logger.Fatal().Err(err)
+			logger.Fatalln("Error listing")
 
 		}
 
 		if len(instances) > 0 {
 			for _, instance := range instances {
-				var shardIps []string
-				shardId := (strings.Split(instance.Name, "-"))[1]
-
-				ListNicInput := &compute.ListNICsInput{InstanceID: instance.ID}
-				Nics, err := ci.ListNICs(ctx, ListNicInput)
-
-				if err == nil {
-					for _, nic := range Nics {
-
-						IPArray = append(IPArray, nic.IP+":10901")
-						promUrl := "http://" + nic.IP + ":9090"
-						logger.Info().Msg("Adding IP to map")
-						_, ok := ShardAndIpsMap[shardId]
-						if ok {
-
-							ShardAndIpsMap[shardId] = append(ShardAndIpsMap[shardId], promUrl)
-						} else {
-							ShardAndIpsMap[shardId] = append(shardIps, promUrl)
-						}
-
-					}
+				ltinput := &compute.ListTagsInput{
+					ID: instance.ID,
 				}
+				tags, err := ci.ListTags(ctxLog, ltinput)
+				fmt.Println("Tags are ", tags, err, instance.ID)
+				labels := make(map[string]string)
+				for k, v := range tags {
+					fmt.Println("KV", k, v)
+					key := fmt.Sprintf("%v", k)
+					val := fmt.Sprintf("%v", v)
+					labels[key] = val
+				}
+				fmt.Println("Labels are ", labels, labels["traefik.triton.service.name"])
+				tempData := itemData{
+					ID:      instance.ID,
+					Name:    labels["traefik.triton.service.name"],
+					Address: instance.PrimaryIP,
+					Port:    labels["traefik.triton.service.port"],
+					Labels:  labels,
+				}
+				extraConf, _ := p.getConfiguration(tempData)
+
+				tempData.ExtraConf = extraConf
+
+				data = append(data, tempData)
 
 			}
 
 		}
+
 	}
 
-	return IPArray, ShardAndIpsMap, err
+	return data, err
 }

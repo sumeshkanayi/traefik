@@ -1,4 +1,4 @@
-package consulcatalog
+package triton
 
 import (
 	"context"
@@ -10,20 +10,19 @@ import (
 	"github.com/containous/traefik/v2/pkg/config/label"
 	"github.com/containous/traefik/v2/pkg/log"
 	"github.com/containous/traefik/v2/pkg/provider"
-	"github.com/containous/traefik/v2/pkg/provider/constraints"
-	"github.com/hashicorp/consul/api"
 )
 
 func (p *Provider) buildConfiguration(ctx context.Context, items []itemData) *dynamic.Configuration {
 	configurations := make(map[string]*dynamic.Configuration)
 
 	for _, item := range items {
-		svcName := item.Node + "-" + item.Name + "-" + item.ID
+		svcName := item.Name + "-" + item.ID
 		ctxSvc := log.With(ctx, log.Str("serviceName", svcName))
-
-		if !p.keepContainer(ctxSvc, item) {
-			continue
-		}
+		/*
+			if !p.keepContainer(ctxSvc, item) {
+				continue
+			}
+		*/
 
 		logger := log.FromContext(ctxSvc)
 
@@ -72,6 +71,7 @@ func (p *Provider) buildConfiguration(ctx context.Context, items []itemData) *dy
 	return provider.Merge(ctx, configurations)
 }
 
+/*
 func (p *Provider) keepContainer(ctx context.Context, item itemData) bool {
 	logger := log.FromContext(ctx)
 
@@ -90,14 +90,9 @@ func (p *Provider) keepContainer(ctx context.Context, item itemData) bool {
 		return false
 	}
 
-	if item.Status != api.HealthPassing && item.Status != api.HealthWarning {
-		logger.Debug("Filtering unhealthy or starting item")
-		return false
-	}
-
 	return true
 }
-
+*/
 func (p *Provider) buildTCPServiceConfiguration(ctx context.Context, item itemData, configuration *dynamic.TCPConfiguration) error {
 	if len(configuration.Services) == 0 {
 		configuration.Services = make(map[string]*dynamic.TCPService)

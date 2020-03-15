@@ -52,6 +52,9 @@ func NewProviderAggregator(conf static.Providers) ProviderAggregator {
 	if conf.ConsulCatalog != nil {
 		p.quietAddProvider(conf.ConsulCatalog)
 	}
+	if conf.Triton != nil {
+		p.quietAddProvider(conf.Triton)
+	}
 
 	return p
 }

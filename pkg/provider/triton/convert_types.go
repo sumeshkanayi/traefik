@@ -1,4 +1,4 @@
-package consulcatalog
+package triton
 
 import (
 	"strings"

@@ -1,4 +1,4 @@
-package consulcatalog
+package triton
 
 import (
 	"github.com/containous/traefik/v2/pkg/config/label"
@@ -14,7 +14,7 @@ func (p *Provider) getConfiguration(item itemData) (configuration, error) {
 		Enable: p.ExposedByDefault,
 	}
 
-	err := label.Decode(item.Labels, &conf, "traefik.consulcatalog.", "traefik.enable")
+	err := label.Decode(item.Labels, &conf, "traefik.triton.", "traefik.enable")
 	if err != nil {
 		return configuration{}, err
 	}

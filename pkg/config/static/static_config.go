@@ -17,6 +17,7 @@ import (
 	"github.com/containous/traefik/v2/pkg/provider/marathon"
 	"github.com/containous/traefik/v2/pkg/provider/rancher"
 	"github.com/containous/traefik/v2/pkg/provider/rest"
+	"github.com/containous/traefik/v2/pkg/provider/triton"
 	"github.com/containous/traefik/v2/pkg/tls"
 	"github.com/containous/traefik/v2/pkg/tracing/datadog"
 	"github.com/containous/traefik/v2/pkg/tracing/haystack"
@@ -163,6 +164,7 @@ type Providers struct {
 	Rest                      *rest.Provider          `description:"Enable Rest backend with default settings." json:"rest,omitempty" toml:"rest,omitempty" yaml:"rest,omitempty" export:"true" label:"allowEmpty"`
 	Rancher                   *rancher.Provider       `description:"Enable Rancher backend with default settings." json:"rancher,omitempty" toml:"rancher,omitempty" yaml:"rancher,omitempty" export:"true" label:"allowEmpty"`
 	ConsulCatalog             *consulcatalog.Provider `description:"Enable ConsulCatalog backend with default settings." json:"consulCatalog,omitempty" toml:"consulCatalog,omitempty" yaml:"consulCatalog,omitempty"`
+	Triton                    *triton.Provider        `description:"Enable triton backend with default settings." json:"triton,omitempty" toml:"triton,omitempty" yaml:"triton,omitempty"`
 }
 
 // SetEffectiveConfiguration adds missing configuration parameters derived from existing ones.
