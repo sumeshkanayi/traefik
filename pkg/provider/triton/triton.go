@@ -1,8 +1,11 @@
-package consulcatalog
+package triton
 
 import (
 	"context"
+	"encoding/pem"
 	"fmt"
+	"io/ioutil"
+	"os"
 	"strconv"
 	"strings"
 	"text/template"
@@ -17,6 +20,9 @@ import (
 	"github.com/containous/traefik/v2/pkg/safe"
 	"github.com/containous/traefik/v2/pkg/types"
 	"github.com/hashicorp/consul/api"
+	triton "github.com/joyent/triton-go"
+	"github.com/joyent/triton-go/authentication"
+	"github.com/joyent/triton-go/compute"
 )
 
 // DefaultTemplateRule The default template for the default rule.
@@ -53,14 +59,13 @@ type Provider struct {
 }
 
 // EndpointConfig holds configurations of the endpoint.
+
 type EndpointConfig struct {
-	Address          string                  `description:"The address of the Consul server" json:"address,omitempty" toml:"address,omitempty" yaml:"address,omitempty" export:"true"`
-	Scheme           string                  `description:"The URI scheme for the Consul server" json:"scheme,omitempty" toml:"scheme,omitempty" yaml:"scheme,omitempty" export:"true"`
-	DataCenter       string                  `description:"Data center to use. If not provided, the default agent data center is used" json:"datacenter,omitempty" toml:"datacenter,omitempty" yaml:"datacenter,omitempty" export:"true"`
-	Token            string                  `description:"Token is used to provide a per-request ACL token which overrides the agent's default token" json:"token,omitempty" toml:"token,omitempty" yaml:"token,omitempty" export:"true"`
-	TLS              *types.ClientTLS        `description:"Enable TLS support." json:"tls,omitempty" toml:"tls,omitempty" yaml:"tls,omitempty" export:"true"`
-	HTTPAuth         *EndpointHTTPAuthConfig `description:"Auth info to use for http access" json:"httpAuth,omitempty" toml:"httpAuth,omitempty" yaml:"httpAuth,omitempty" export:"true"`
-	EndpointWaitTime types.Duration          `description:"WaitTime limits how long a Watch will block. If not provided, the agent default values will be used" json:"endpointWaitTime,omitempty" toml:"endpointWaitTime,omitempty" yaml:"endpointWaitTime,omitempty" export:"true"`
+	SDCAccount       string         `description:"SDC Account" json:"sdcaccount,omitempty" toml:"sdcaccount,omitempty" yaml:"sdaccount,omitempty" export:"true"`
+	SDCKeyID         string         `description:"SDC Key ID" json:"sdckeyid,omitempty" toml:"sdckeyid,omitempty" yaml:"sdckeyid,omitempty" export:"true"`
+	SDCKeyMaterial   string         `description:"SDC Key Material" json:"sdckeymaterial,omitempty" toml:"sdckeymaterial,omitempty" yaml:"sdckeymaterial,omitempty" export:"true"`
+	Address          string         `description:"The address of the Consul server" json:"address,omitempty" toml:"address,omitempty" yaml:"address,omitempty" export:"true"`
+	EndpointWaitTime types.Duration `description:"WaitTime limits how long a Watch will block. If not provided, the agent default values will be used" json:"endpointWaitTime,omitempty" toml:"endpointWaitTime,omitempty" yaml:"endpointWaitTime,omitempty" export:"true"`
 }
 
 // SetDefaults sets the default values.
@@ -93,7 +98,9 @@ func (p *Provider) Init() error {
 	}
 
 	p.defaultRuleTpl = defaultRuleTpl
+
 	return nil
+
 }
 
 // Provide allows the consul catalog provider to provide configurations to traefik using the given configuration channel.
@@ -290,4 +297,111 @@ func createClient(cfg *EndpointConfig) (*api.Client, error) {
 	}
 
 	return api.NewClient(&config)
+}
+
+func NewTritonClient(SDC_URL string, ctxLog context.Context) (*compute.ComputeClient, error) {
+	logger := log.FromContext(ctxLog)
+
+	keyMaterial := os.Getenv("TRITON_KEY_MATERIAL")
+	keyID := os.Getenv("TRITON_SSH_KEY_ID")
+	accountName := os.Getenv("TRITON_ACCOUNT")
+	userName := ""
+	var signer authentication.Signer
+	var err error
+
+	var keyBytes []byte
+	if _, err = os.Stat(keyMaterial); err == nil {
+		keyBytes, err = ioutil.ReadFile(keyMaterial)
+		if err != nil {
+			logger.Fatalln("Error reading key material")
+
+		}
+		block, _ := pem.Decode(keyBytes)
+		if block == nil {
+			logger.Fatalln("No key found")
+		}
+
+		if block.Headers["Proc-Type"] == "4,ENCRYPTED" {
+			logger.Fatalln("password protected keys are not currently supported. Please decrypt the key prior to use")
+
+		}
+
+	} else {
+		keyBytes = []byte(keyMaterial)
+	}
+
+	input := authentication.PrivateKeySignerInput{
+		KeyID:              keyID,
+		PrivateKeyMaterial: keyBytes,
+		AccountName:        accountName,
+		Username:           userName,
+	}
+
+	signer, err = authentication.NewPrivateKeySigner(input)
+	if err != nil {
+		logger.Fatalln("Error Creating SSH Private Key Signer")
+
+	}
+
+	config := &triton.ClientConfig{
+		TritonURL:   SDC_URL,
+		AccountName: accountName,
+		Username:    userName,
+		Signers:     []authentication.Signer{signer},
+	}
+
+	c, err := compute.NewClient(config)
+	if err != nil {
+		logger.Fatalln("Compute new client")
+
+	}
+	return c, err
+}
+
+func GetMachineMetaByTag(tagName string, tagValue string, cArr []*compute.ComputeClient) ([]string, map[string]pq.StringArray, error) {
+	ShardAndIpsMap := make(map[string]pq.StringArray)
+	var IPArray []string
+	ctx := context.Background()
+	var err error
+	for _, c := range cArr {
+
+		listInput := &compute.ListInstancesInput{Tags: map[string]interface{}{tagName: tagValue}}
+		ci := c.Instances()
+		instances, err := ci.List(context.Background(), listInput)
+		if err != nil {
+			logger.Fatal().Err(err)
+
+		}
+
+		if len(instances) > 0 {
+			for _, instance := range instances {
+				var shardIps []string
+				shardId := (strings.Split(instance.Name, "-"))[1]
+
+				ListNicInput := &compute.ListNICsInput{InstanceID: instance.ID}
+				Nics, err := ci.ListNICs(ctx, ListNicInput)
+
+				if err == nil {
+					for _, nic := range Nics {
+
+						IPArray = append(IPArray, nic.IP+":10901")
+						promUrl := "http://" + nic.IP + ":9090"
+						logger.Info().Msg("Adding IP to map")
+						_, ok := ShardAndIpsMap[shardId]
+						if ok {
+
+							ShardAndIpsMap[shardId] = append(ShardAndIpsMap[shardId], promUrl)
+						} else {
+							ShardAndIpsMap[shardId] = append(shardIps, promUrl)
+						}
+
+					}
+				}
+
+			}
+
+		}
+	}
+
+	return IPArray, ShardAndIpsMap, err
 }
