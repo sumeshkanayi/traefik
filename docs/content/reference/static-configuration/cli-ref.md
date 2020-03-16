@@ -522,6 +522,45 @@ Enable Rest backend with default settings. (Default: ```false```)
 `--providers.rest.insecure`:  
 Activate REST Provider directly on the entryPoint named traefik. (Default: ```false```)
 
+`--providers.triton.cache`:  
+Use local agent caching for catalog reads. (Default: ```false```)
+
+`--providers.triton.constraints`:  
+Constraints is an expression that Traefik matches against the container's labels to determine whether to create any route for that container.
+
+`--providers.triton.defaultrule`:  
+Default rule. (Default: ```Host(`{{ normalize .Name }}`)```)
+
+`--providers.triton.endpoint.address`:  
+The address of the Consul server (Default: ```http://127.0.0.1:8500```)
+
+`--providers.triton.endpoint.endpointwaittime`:  
+WaitTime limits how long a Watch will block. If not provided, the agent default values will be used (Default: ```0```)
+
+`--providers.triton.endpoint.sdcaccount`:  
+SDC Account
+
+`--providers.triton.endpoint.sdckeyid`:  
+SDC Key ID
+
+`--providers.triton.endpoint.sdckeymaterial`:  
+SDC Key Material
+
+`--providers.triton.exposedbydefault`:  
+Expose containers by default. (Default: ```true```)
+
+`--providers.triton.prefix`:  
+Prefix for consul service tags. Default 'traefik' (Default: ```traefik```)
+
+`--providers.triton.refreshinterval`:  
+Interval for check Consul API. Default 100ms (Default: ```15```)
+
+`--providers.triton.requireconsistent`:  
+Forces the read to be fully consistent. (Default: ```false```)
+
+`--providers.triton.stale`:  
+Use stale consistency for catalog reads. (Default: ```false```)
+
 `--serverstransport.forwardingtimeouts.dialtimeout`:  
 The amount of time to wait until a connection to a backend server can be established. If zero, no timeout exists. (Default: ```30```)
 
