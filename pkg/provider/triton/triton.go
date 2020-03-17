@@ -49,9 +49,9 @@ type Provider struct {
 
 type EndpointConfig struct {
 	SDCAccount       string         `description:"SDC Account" json:"sdcaccount,omitempty" toml:"sdcaccount,omitempty" yaml:"sdaccount,omitempty" export:"true"`
-	SDCKeyID         string         `description:"SDC Key ID" json:"sdckeyid,omitempty" toml:"sdckeyid,omitempty" yaml:"sdckeyid,omitempty" export:"true"`
+	SDCCloudAPIs     []string       `description:"SDC Account" json:"apis,omitempty" toml:"apis,omitempty" yaml:"apis,omitempty" export:"true"`
+	SDCKeyID         string         `description:"SDC Key ID" json:"sdckeyid,omitempty" toml:"sdckeyids,omitempty" yaml:"sdckeyid,omitempty" export:"true"`
 	SDCKeyMaterial   string         `description:"SDC Key Material" json:"sdckeymaterial,omitempty" toml:"sdckeymaterial,omitempty" yaml:"sdckeymaterial,omitempty" export:"true"`
-	SDCCloudAPIs     string         `description:"SDC CLoudAPIs" json:"cloudapis,omitempty" toml:"cloudapis,omitempty" yaml:"cloudapis,omitempty" export:"true"`
 	EndpointWaitTime types.Duration `description:"WaitTime limits how long a Watch will block. If not provided, the agent default values will be used" json:"endpointWaitTime,omitempty" toml:"endpointWaitTime,omitempty" yaml:"endpointWaitTime,omitempty" export:"true"`
 }
 
