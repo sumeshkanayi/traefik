@@ -37,13 +37,9 @@ type itemData struct {
 
 // Provider holds configurations of the provider.
 type Provider struct {
-	Constraints       string          `description:"Constraints is an expression that Traefik matches against the container's labels to determine whether to create any route for that container." json:"constraints,omitempty" toml:"constraints,omitempty" yaml:"constraints,omitempty" export:"true"`
 	Endpoint          *EndpointConfig `description:"Consul endpoint settings" json:"endpoint,omitempty" toml:"endpoint,omitempty" yaml:"endpoint,omitempty" export:"true"`
-	Prefix            string          `description:"Prefix for consul service tags. Default 'traefik'" json:"prefix,omitempty" toml:"prefix,omitempty" yaml:"prefix,omitempty" export:"true"`
+	Prefix            string          `description:"Prefix for ctriton instance tags. Default 'traefik'" json:"prefix,omitempty" toml:"prefix,omitempty" yaml:"prefix,omitempty" export:"true"`
 	RefreshInterval   types.Duration  `description:"Interval for check Consul API. Default 100ms" json:"refreshInterval,omitempty" toml:"refreshInterval,omitempty" yaml:"refreshInterval,omitempty" export:"true"`
-	RequireConsistent bool            `description:"Forces the read to be fully consistent." json:"requireConsistent,omitempty" toml:"requireConsistent,omitempty" yaml:"requireConsistent,omitempty" export:"true"`
-	Stale             bool            `description:"Use stale consistency for catalog reads." json:"stale,omitempty" toml:"stale,omitempty" yaml:"stale,omitempty" export:"true"`
-	Cache             bool            `description:"Use local agent caching for catalog reads." json:"cache,omitempty" toml:"cache,omitempty" yaml:"cache,omitempty" export:"true"`
 	ExposedByDefault  bool            `description:"Expose containers by default." json:"exposedByDefault,omitempty" toml:"exposedByDefault,omitempty" yaml:"exposedByDefault,omitempty" export:"true"`
 	DefaultRule       string          `description:"Default rule." json:"defaultRule,omitempty" toml:"defaultRule,omitempty" yaml:"defaultRule,omitempty"`
 	defaultRuleTpl    *template.Template
@@ -55,13 +51,15 @@ type EndpointConfig struct {
 	SDCAccount       string         `description:"SDC Account" json:"sdcaccount,omitempty" toml:"sdcaccount,omitempty" yaml:"sdaccount,omitempty" export:"true"`
 	SDCKeyID         string         `description:"SDC Key ID" json:"sdckeyid,omitempty" toml:"sdckeyid,omitempty" yaml:"sdckeyid,omitempty" export:"true"`
 	SDCKeyMaterial   string         `description:"SDC Key Material" json:"sdckeymaterial,omitempty" toml:"sdckeymaterial,omitempty" yaml:"sdckeymaterial,omitempty" export:"true"`
-	Address          string         `description:"The address of the Consul server" json:"address,omitempty" toml:"address,omitempty" yaml:"address,omitempty" export:"true"`
+	SDCCloudAPIs     string       `description:"SDC CLoudAPIs" json:"cloudapis,omitempty" toml:"cloudapis,omitempty" yaml:"cloudapis,omitempty" export:"true"`
 	EndpointWaitTime types.Duration `description:"WaitTime limits how long a Watch will block. If not provided, the agent default values will be used" json:"endpointWaitTime,omitempty" toml:"endpointWaitTime,omitempty" yaml:"endpointWaitTime,omitempty" export:"true"`
 }
 
 // SetDefaults sets the default values.
 func (c *EndpointConfig) SetDefaults() {
-	c.Address = "http://127.0.0.1:8500"
+	c.SDCKeyMaterial = os.Getenv("HOME")+"/.ssh/id_rsa"
+	c.SDCKeyID=os.Getenv("SDC_KEY_ID")
+	c.SDCAccount=os.Getenv("SDC_ACCOUNT")
 }
 
 // SetDefaults sets the default values.
@@ -101,21 +99,21 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 			for {
 				select {
 				case <-ticker.C:
-					c2 := "https://us-east-2-cloudapi.bdf-cloud.iqvia.net"
-					c3 := "https://us-east-3-cloudapi.bdf-cloud.iqvia.net"
-					c4 := "https://us-east-4-cloudapi.bdf-cloud.iqvia.net"
-
-					c2s, err1 := p.NewTritonClient(c2, ctxLog)
-					c3s, err2 := p.NewTritonClient(c3, ctxLog)
-					c4s, err3 := p.NewTritonClient(c4, ctxLog)
-
-					if err1 != nil && err2 != nil && err3 != nil {
-						logger.Fatalln("Error")
+					var computeClientArray []*compute.ComputeClient
+					for _,api:=range p.Endpoint.SDCCloudAPIs{
+						cClient,err:=p.NewTritonClient(api, ctxLog)
+						if(err!=nil){
+							logger.Errorf("Cannot connect to triton cloud api %+v", api)
+							continue
+						}
+						computeClientArray=append(computeClientArray,cClient)
+						
 
 					}
-					cArr := []*compute.ComputeClient{c2s, c3s, c4s}
+
+
 					tagName := fmt.Sprintf(p.Prefix + ".Enable")
-					data, err := p.GetMachineMetaByTag(tagName, "true", cArr, ctxLog)
+					data, err := p.GetTritonInstanceDetailsByTag(tagName, "true", computeClientArray, ctxLog)
 					if err != nil {
 						logger.Errorf("error triton meta data, %v", err)
 						return err
@@ -127,6 +125,7 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 						ProviderName:  "triton",
 						Configuration: configuration,
 					}
+				
 				case <-routineCtx.Done():
 					ticker.Stop()
 					return nil
@@ -140,88 +139,14 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 
 		err := backoff.RetryNotify(safe.OperationWithRecover(operation), backoff.WithContext(job.NewBackOff(backoff.NewExponentialBackOff()), ctxLog), notify)
 		if err != nil {
-			logger.Errorf("Cannot connect to triton server %+v", err)
+			logger.Errorf("Cannot connect to triton cloud api %+v", err)
 		}
 	})
 
 	return nil
 }
 
-/*
-func (p *Provider) getConsulServicesData(ctx context.Context) ([]itemData, error) {
-	consulServiceNames, err := p.fetchServices(ctx)
-	fmt.Println("Sumesh: consul service names are", consulServiceNames)
-	if err != nil {
-		return nil, err
-	}
 
-	var data []itemData
-	for _, name := range consulServiceNames {
-		consulServices, healthServices, err := p.fetchService(ctx, name)
-		if err != nil {
-			return nil, err
-		}
-
-		for i, consulService := range consulServices {
-			address := consulService.ServiceAddress
-			if address == "" {
-				address = consulService.Address
-			}
-
-			item := itemData{
-				ID:      consulService.ServiceID,
-				Node:    consulService.Node,
-				Name:    consulService.ServiceName,
-				Address: address,
-				Port:    strconv.Itoa(consulService.ServicePort),
-				Labels:  tagsToNeutralLabels(consulService.ServiceTags, p.Prefix),
-				Tags:    consulService.ServiceTags,
-				Status:  healthServices[i].Checks.AggregatedStatus(),
-			}
-
-			fmt.Println("Sumesh Item Data is ", item)
-
-			extraConf, err := p.getConfiguration(item)
-			fmt.Println("Sumesh :Extra config is ", extraConf)
-			if err != nil {
-				log.FromContext(ctx).Errorf("Skip item %s: %v", item.Name, err)
-				continue
-			}
-			item.ExtraConf = extraConf
-
-			data = append(data, item)
-		}
-	}
-	fmt.Println("Sumesh : data is ", data)
-	return data, nil
-}
-
-func (p *Provider) fetchService(ctx context.Context, name string) ([]*api.CatalogService, []*api.ServiceEntry, error) {
-	var tagFilter string
-	if !p.ExposedByDefault {
-		tagFilter = p.Prefix + ".enable=true"
-	}
-
-	opts := &api.QueryOptions{AllowStale: p.Stale, RequireConsistent: p.RequireConsistent, UseCache: p.Cache}
-
-	consulServices, _, err := p.client.Catalog().Service(name, tagFilter, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	healthServices, _, err := p.client.Health().Service(name, tagFilter, false, opts)
-	return consulServices, healthServices, err
-}
-
-func contains(values []string, val string) bool {
-	for _, value := range values {
-		if strings.EqualFold(value, val) {
-			return true
-		}
-	}
-	return false
-}
-*/
 func (p *Provider) NewTritonClient(SDC_URL string, ctxLog context.Context) (*compute.ComputeClient, error) {
 	logger := log.FromContext(ctxLog)
 	keyMaterial := p.Endpoint.SDCKeyMaterial
@@ -281,18 +206,18 @@ func (p *Provider) NewTritonClient(SDC_URL string, ctxLog context.Context) (*com
 	return c, err
 }
 
-func (p *Provider) GetMachineMetaByTag(tagName string, tagValue string, cArr []*compute.ComputeClient, ctxLog context.Context) ([]itemData, error) {
+func (p *Provider) GetTritonInstanceDetailsByTag(tagName string, tagValue string, cArr []*compute.ComputeClient, ctxLog context.Context) ([]itemData, error) {
 	var data []itemData
 	logger := log.FromContext(ctxLog)
 	var err error
-	fmt.Println("C ARRRRR is", cArr)
 	for _, c := range cArr {
 
 		listInput := &compute.ListInstancesInput{Tags: map[string]interface{}{tagName: tagValue}}
 		ci := c.Instances()
 		instances, err := ci.List(context.Background(), listInput)
 		if err != nil {
-			logger.Fatalln("Error listing")
+			logger.Errorf("Cannot connect List instances %+v", err)
+			continue
 
 		}
 
@@ -302,15 +227,17 @@ func (p *Provider) GetMachineMetaByTag(tagName string, tagValue string, cArr []*
 					ID: instance.ID,
 				}
 				tags, err := ci.ListTags(ctxLog, ltinput)
-				fmt.Println("Tags are ", tags, err, instance.ID)
+				if (err!=nil){
+					logger.Errorf("Cannot connect List tags %+v", err)
+					continue
+
+				}
 				labels := make(map[string]string)
 				for k, v := range tags {
-					fmt.Println("KV", k, v)
 					key := fmt.Sprintf("%v", k)
 					val := fmt.Sprintf("%v", v)
 					labels[key] = val
 				}
-				fmt.Println("Labels are ", labels, labels["traefik.triton.service.name"])
 				tempData := itemData{
 					ID:      instance.ID,
 					Name:    labels["traefik.triton.service.name"],
