@@ -37,30 +37,29 @@ type itemData struct {
 
 // Provider holds configurations of the provider.
 type Provider struct {
-	Endpoint          *EndpointConfig `description:"Consul endpoint settings" json:"endpoint,omitempty" toml:"endpoint,omitempty" yaml:"endpoint,omitempty" export:"true"`
-	Prefix            string          `description:"Prefix for ctriton instance tags. Default 'traefik'" json:"prefix,omitempty" toml:"prefix,omitempty" yaml:"prefix,omitempty" export:"true"`
-	RefreshInterval   types.Duration  `description:"Interval for check Consul API. Default 100ms" json:"refreshInterval,omitempty" toml:"refreshInterval,omitempty" yaml:"refreshInterval,omitempty" export:"true"`
-	ExposedByDefault  bool            `description:"Expose containers by default." json:"exposedByDefault,omitempty" toml:"exposedByDefault,omitempty" yaml:"exposedByDefault,omitempty" export:"true"`
-	DefaultRule       string          `description:"Default rule." json:"defaultRule,omitempty" toml:"defaultRule,omitempty" yaml:"defaultRule,omitempty"`
-	defaultRuleTpl    *template.Template
+	Endpoint         *EndpointConfig `description:"Consul endpoint settings" json:"endpoint,omitempty" toml:"endpoint,omitempty" yaml:"endpoint,omitempty" export:"true"`
+	Prefix           string          `description:"Prefix for ctriton instance tags. Default 'traefik'" json:"prefix,omitempty" toml:"prefix,omitempty" yaml:"prefix,omitempty" export:"true"`
+	RefreshInterval  types.Duration  `description:"Interval for check Consul API. Default 100ms" json:"refreshInterval,omitempty" toml:"refreshInterval,omitempty" yaml:"refreshInterval,omitempty" export:"true"`
+	ExposedByDefault bool            `description:"Expose containers by default." json:"exposedByDefault,omitempty" toml:"exposedByDefault,omitempty" yaml:"exposedByDefault,omitempty" export:"true"`
+	DefaultRule      string          `description:"Default rule." json:"defaultRule,omitempty" toml:"defaultRule,omitempty" yaml:"defaultRule,omitempty"`
+	defaultRuleTpl   *template.Template
 }
 
 // EndpointConfig holds configurations of the endpoint.
 
 type EndpointConfig struct {
 	SDCAccount       string         `description:"SDC Account" json:"sdcaccount,omitempty" toml:"sdcaccount,omitempty" yaml:"sdaccount,omitempty" export:"true"`
-	SDCCloudAPIs     []string        `description:"SDC Account" json:"apis,omitempty" toml:"apis,omitempty" yaml:"apis,omitempty" export:"true"`
 	SDCKeyID         string         `description:"SDC Key ID" json:"sdckeyid,omitempty" toml:"sdckeyid,omitempty" yaml:"sdckeyid,omitempty" export:"true"`
+	SDCCloudAPIs     []string       `description:"SDC API URL" json:"sdccloudapis,omitempty" toml:"sdccloudapis,omitempty" yaml:"sdccloudapis,omitempty" export:"true"`
 	SDCKeyMaterial   string         `description:"SDC Key Material" json:"sdckeymaterial,omitempty" toml:"sdckeymaterial,omitempty" yaml:"sdckeymaterial,omitempty" export:"true"`
-	SDCCloudAPIs     []string        `description:"SDC CLoudAPIs" json:"cloudapis,omitempty" toml:"cloudapis,omitempty" yaml:"cloudapis,omitempty" export:"true"`
 	EndpointWaitTime types.Duration `description:"WaitTime limits how long a Watch will block. If not provided, the agent default values will be used" json:"endpointWaitTime,omitempty" toml:"endpointWaitTime,omitempty" yaml:"endpointWaitTime,omitempty" export:"true"`
 }
 
 // SetDefaults sets the default values.
 func (c *EndpointConfig) SetDefaults() {
-	c.SDCKeyMaterial = os.Getenv("HOME")+"/.ssh/id_rsa"
-	c.SDCKeyID=os.Getenv("SDC_KEY_ID")
-	c.SDCAccount=os.Getenv("SDC_ACCOUNT")
+	c.SDCKeyMaterial = os.Getenv("HOME") + "/.ssh/id_rsa"
+	c.SDCKeyID = os.Getenv("SDC_KEY_ID")
+	c.SDCAccount = os.Getenv("SDC_ACCOUNT")
 }
 
 // SetDefaults sets the default values.
@@ -101,17 +100,16 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 				select {
 				case <-ticker.C:
 					var computeClientArray []*compute.ComputeClient
-					for _,api:=range p.Endpoint.SDCCloudAPIs{
-						cClient,err:=p.NewTritonClient(api, ctxLog)
-						if(err!=nil){
+					for _, api := range p.Endpoint.SDCCloudAPIs {
+						fmt.Println("Getting client for",api)
+						cClient, err := p.NewTritonClient(api, ctxLog)
+						if err != nil {
 							logger.Errorf("Cannot connect to triton cloud api %+v", api)
 							continue
 						}
-						computeClientArray=append(computeClientArray,cClient)
-						
+						computeClientArray = append(computeClientArray, cClient)
 
 					}
-
 
 					tagName := fmt.Sprintf(p.Prefix + ".Enable")
 					data, err := p.GetTritonInstanceDetailsByTag(tagName, "true", computeClientArray, ctxLog)
@@ -126,7 +124,7 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 						ProviderName:  "triton",
 						Configuration: configuration,
 					}
-				
+
 				case <-routineCtx.Done():
 					ticker.Stop()
 					return nil
@@ -146,7 +144,6 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 
 	return nil
 }
-
 
 func (p *Provider) NewTritonClient(SDC_URL string, ctxLog context.Context) (*compute.ComputeClient, error) {
 	logger := log.FromContext(ctxLog)
@@ -228,7 +225,7 @@ func (p *Provider) GetTritonInstanceDetailsByTag(tagName string, tagValue string
 					ID: instance.ID,
 				}
 				tags, err := ci.ListTags(ctxLog, ltinput)
-				if (err!=nil){
+				if err != nil {
 					logger.Errorf("Cannot connect List tags %+v", err)
 					continue
 
