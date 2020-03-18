@@ -37,10 +37,12 @@ type itemData struct {
 
 // Provider holds configurations of the provider.
 type Provider struct {
-	Endpoint         *EndpointConfig `description:"Consul endpoint settings" json:"endpoint,omitempty" toml:"endpoint,omitempty" yaml:"endpoint,omitempty" export:"true"`
-	Prefix           string          `description:"Prefix for ctriton instance tags. Default 'traefik'" json:"prefix,omitempty" toml:"prefix,omitempty" yaml:"prefix,omitempty" export:"true"`
-	RefreshInterval  types.Duration  `description:"Interval for check Consul API. Default 100ms" json:"refreshInterval,omitempty" toml:"refreshInterval,omitempty" yaml:"refreshInterval,omitempty" export:"true"`
+	Endpoint         *EndpointConfig `description:"triton endpoint settings" json:"endpoint,omitempty" toml:"endpoint,omitempty" yaml:"endpoint,omitempty" export:"true"`
 	ExposedByDefault bool            `description:"Expose containers by default." json:"exposedByDefault,omitempty" toml:"exposedByDefault,omitempty" yaml:"exposedByDefault,omitempty" export:"true"`
+	Prefix           string          `description:"Prefix for ctriton instance tags. Default 'traefik'" json:"prefix,omitempty" toml:"prefix,omitempty" yaml:"prefix,omitempty" export:"true"`
+	ServiceTag       string          `description:"Name of instance service tag." json:"servicetag,omitempty" toml:"servicetag,omitempty" yaml:"servicetag,omitempty"`
+	PortTag          string          `description:"Name of instance port tag." json:"porttag,omitempty" toml:"porttag,omitempty" yaml:"porttag,omitempty"`
+	RefreshInterval  types.Duration  `description:"Interval for check triton cloud API. Default 100ms" json:"refreshInterval,omitempty" toml:"refreshInterval,omitempty" yaml:"refreshInterval,omitempty" export:"true"`
 	DefaultRule      string          `description:"Default rule." json:"defaultRule,omitempty" toml:"defaultRule,omitempty" yaml:"defaultRule,omitempty"`
 	defaultRuleTpl   *template.Template
 }
@@ -60,6 +62,8 @@ func (c *EndpointConfig) SetDefaults() {
 	c.SDCKeyMaterial = os.Getenv("HOME") + "/.ssh/id_rsa"
 	c.SDCKeyID = os.Getenv("SDC_KEY_ID")
 	c.SDCAccount = os.Getenv("SDC_ACCOUNT")
+	c.SDCCloudAPIs = []string{os.Getenv("SDC_URL")}
+
 }
 
 // SetDefaults sets the default values.
@@ -69,8 +73,10 @@ func (p *Provider) SetDefaults() {
 	p.Endpoint = endpoint
 	p.RefreshInterval = types.Duration(15 * time.Second)
 	p.Prefix = "traefik"
-	p.ExposedByDefault = true
 	p.DefaultRule = DefaultTemplateRule
+	p.ServiceTag = "traefik.triton.service.name"
+	p.PortTag = "traefik.triton.service.port"
+	p.ExposedByDefault = false
 }
 
 // Init the provider.
@@ -86,7 +92,7 @@ func (p *Provider) Init() error {
 
 }
 
-// Provide allows the consul catalog provider to provide configurations to traefik using the given configuration channel.
+// Provide allows the triton cloud api provider to provide configurations to traefik using the given configuration channel.
 func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.Pool) error {
 	pool.GoCtx(func(routineCtx context.Context) {
 		ctxLog := log.With(routineCtx, log.Str(log.ProviderName, "triton"))
@@ -100,29 +106,33 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 				select {
 				case <-ticker.C:
 					var computeClientArray []*compute.ComputeClient
-					for _, api := range p.Endpoint.SDCCloudAPIs {
-						fmt.Println("Getting client for",api)
-						cClient, err := p.NewTritonClient(api, ctxLog)
-						if err != nil {
-							logger.Errorf("Cannot connect to triton cloud api %+v", api)
-							continue
+					if len(p.Endpoint.SDCCloudAPIs) != 0 {
+						for _, api := range p.Endpoint.SDCCloudAPIs {
+							logger.Infoln("Building compute client for ", api)
+							cClient, err := p.NewTritonClient(api, ctxLog)
+							if err != nil {
+								logger.Errorf("Cannot connect to triton cloud api %+v", api)
+								continue
+							}
+							computeClientArray = append(computeClientArray, cClient)
+
 						}
-						computeClientArray = append(computeClientArray, cClient)
 
-					}
+						tagName := fmt.Sprintf(p.Prefix + ".enable")
+						data, err := p.GetTritonInstanceDetailsByTag(tagName, "true", computeClientArray, ctxLog)
+						if err != nil {
+							logger.Errorf("error triton meta data, %v", err)
+							return err
+						}
 
-					tagName := fmt.Sprintf(p.Prefix + ".Enable")
-					data, err := p.GetTritonInstanceDetailsByTag(tagName, "true", computeClientArray, ctxLog)
-					if err != nil {
-						logger.Errorf("error triton meta data, %v", err)
-						return err
-					}
-
-					configuration := p.buildConfiguration(routineCtx, data)
-					fmt.Println("Build configuration is ", *configuration)
-					configurationChan <- dynamic.Message{
-						ProviderName:  "triton",
-						Configuration: configuration,
+						configuration := p.buildConfiguration(routineCtx, data)
+						fmt.Println("Build configuration is ", *configuration)
+						configurationChan <- dynamic.Message{
+							ProviderName:  "triton",
+							Configuration: configuration,
+						}
+					} else {
+						logger.Errorln("SDC Cloud API URL field is empty")
 					}
 
 				case <-routineCtx.Done():
@@ -148,10 +158,6 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 func (p *Provider) NewTritonClient(SDC_URL string, ctxLog context.Context) (*compute.ComputeClient, error) {
 	logger := log.FromContext(ctxLog)
 	keyMaterial := p.Endpoint.SDCKeyMaterial
-	keyID := p.Endpoint.SDCKeyID
-	accountName := p.Endpoint.SDCAccount
-	fmt.Println("Triton details", keyMaterial, keyID, accountName)
-	userName := ""
 	var signer authentication.Signer
 	var err error
 
@@ -177,10 +183,10 @@ func (p *Provider) NewTritonClient(SDC_URL string, ctxLog context.Context) (*com
 	}
 
 	input := authentication.PrivateKeySignerInput{
-		KeyID:              keyID,
+		KeyID:              p.Endpoint.SDCKeyID,
 		PrivateKeyMaterial: keyBytes,
-		AccountName:        accountName,
-		Username:           userName,
+		AccountName:        p.Endpoint.SDCAccount,
+		Username:           "",
 	}
 
 	signer, err = authentication.NewPrivateKeySigner(input)
@@ -191,8 +197,8 @@ func (p *Provider) NewTritonClient(SDC_URL string, ctxLog context.Context) (*com
 
 	config := &triton.ClientConfig{
 		TritonURL:   SDC_URL,
-		AccountName: accountName,
-		Username:    userName,
+		AccountName: p.Endpoint.SDCAccount,
+		Username:    "",
 		Signers:     []authentication.Signer{signer},
 	}
 
@@ -238,9 +244,9 @@ func (p *Provider) GetTritonInstanceDetailsByTag(tagName string, tagValue string
 				}
 				tempData := itemData{
 					ID:      instance.ID,
-					Name:    labels["traefik.triton.service.name"],
+					Name:    labels[p.ServiceTag],
 					Address: instance.PrimaryIP,
-					Port:    labels["traefik.triton.service.port"],
+					Port:    labels[p.PortTag],
 					Labels:  labels,
 				}
 				extraConf, _ := p.getConfiguration(tempData)
