@@ -1,0 +1,24 @@
+ defaultEntryPoints = ["http"]
+ [metrics]
+  [metrics.prometheus]
+ [entryPoints]
+    [entryPoints.http]
+    address = ":80"
+    [entryPoints.legacy]
+    address = ":9090"
+ [api]
+  dashboard=true
+  insecure=true
+ [providers]
+  [providers.triton]  
+     exposedByDefault = false
+    [providers.triton.endpoint]
+     sdccloudapis = [
+        "https://us-2-cloudapi.net",
+        "https://us-3-cloudapi.net",
+        "https://us-4-cloudapi.net"]
+     sdckeyid = "70:74:ac:db:00:d0:61:28:73:51:9a:f0:c6:cf:bf:e7"
+     sdckeymaterial = "/root/.ssh/id_rsa"
+     sdcaccount = "devopsprod"
+[log]
+  level = "DEBUG"
